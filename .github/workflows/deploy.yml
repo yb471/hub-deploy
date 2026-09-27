@@ -78,13 +78,13 @@ jobs:
           SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
         run: HEAD_SHA="${{ steps.diff.outputs.head }}" bash scripts/quarantine.sh "${{ steps.functions.outputs.start }}"
       - name: deploy failed
-        if: failure() && steps.quarantine.outcome != 'failure'
+        if: failure() && steps.quarantine.outputs.verdict != 'fail'
         env:
           SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
         run: |
           psql "$SUPABASE_DB_URL" -X -q -v ON_ERROR_STOP=1 -c "insert into max.deps (name, kind, ok, checked_at, last_error, note) values ('ci', 'pipeline', false, now(), 'deploy failed before quarantine (tests, guard, migrations, prompts or functions step)', 'run ${{ github.run_id }} for ${{ steps.diff.outputs.head }}') on conflict (name) do update set ok = false, checked_at = now(), last_error = excluded.last_error, note = excluded.note"
       - name: rollback
-        if: failure() && steps.quarantine.outcome == 'failure'
+        if: failure() && steps.quarantine.outputs.verdict == 'fail'
         env:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
           SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
