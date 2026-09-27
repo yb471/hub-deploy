@@ -15,8 +15,8 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262   # v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262   # v4
         with:
           repository: YB471/hub
           token: ${{ secrets.HUB_READ_TOKEN }}
@@ -27,7 +27,7 @@ jobs:
         env:
           SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
         run: bash scripts/changed.sh
-      - uses: denoland/setup-deno@v2
+      - uses: denoland/setup-deno@22d081ff2d3a40755e97629de92e3bcbfa7cf2ed   # v2.0.5
         if: steps.diff.outputs.deploy == 'true'
         with:
           deno-version: v2.x
@@ -50,16 +50,16 @@ jobs:
         env:
           SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
         run: bash scripts/sync_prompts.sh
-      - uses: supabase/setup-cli@v1
+      - uses: supabase/setup-cli@1dedf2c611547ede7232d26866dd3c56ab903bbb   # v1.7.3
         if: steps.diff.outputs.deploy == 'true'
         id: cli
         continue-on-error: true
         with:
-          version: latest
+          version: 2.118.0
       - name: supabase cli fallback
         if: steps.diff.outputs.deploy == 'true' && steps.cli.outcome == 'failure'
         run: |
-          for i in 1 2 3 4; do npm install -g supabase --no-audit --no-fund && break; echo "npm install failed, retry $i"; sleep $((5 * i)); done
+          for i in 1 2 3 4; do npm install -g supabase@2.118.0 --no-audit --no-fund && break; echo "npm install failed, retry $i"; sleep $((5 * i)); done
           supabase --version
       - name: functions
         if: steps.diff.outputs.deploy == 'true'

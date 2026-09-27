@@ -9,7 +9,7 @@
 // extensions, net, cron), ролей и членства, grant к public/anon/authenticated/service_role/postgres, set role, execute
 // (динамического SQL), copy, файлов сервера, chr/decode/convert_from/U& (обфускация), max.config / max.oauth, адресов
 // http(s). Любое нарушение — сборка падает, ничего не выкатывается.
-const ALLOWED_IMPORTS = ["npm:postgres@3.4.5", "jsr:@supabase/supabase-js@2"];
+const ALLOWED_IMPORTS = ["npm:postgres@3.4.5", "jsr:@supabase/supabase-js@2.117.2"];
 const FUNCTION_RULES: [RegExp, string][] = [
   [/\b(globalThis|self|window)\s*\.\s*fetch\s*=/, "fetch reassigned"],
   [/(?<![.\w])fetch\s*=[^=]/, "fetch reassigned"],
