@@ -1,0 +1,103 @@
+# Выкат почтового контура репо hub из отдельного репо (27.09, лучшие практики: конвейер, сторож и секреты вне досягаемости
+# сессий, которые пишут в hub). Раз в пять минут: забрать main репо hub; если с последнего просмотренного коммита менялись
+# mail/functions, mail/migrations или mail/routines/max-inbox.md — типы и тесты, сторож (scripts/lint.ts: эталон _egress.ts,
+# guard в каждой функции, закреплённые импорты, миграции без чужих схем, ролей, execute и адресов), миграции ролью migrator,
+# правила Max, выкат функций, карантин 3 минуты, при провале — откат функций на последний прошедший карантин коммит.
+# Секреты этого репо: SUPABASE_ACCESS_TOKEN (Supabase PAT), SUPABASE_DB_URL (строка подключения ролью migrator),
+# HUB_READ_TOKEN (fine-grained PAT только на чтение репо hub). В hub секретов нет.
+name: deploy
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+concurrency: mail-deploy
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: YB471/hub
+          token: ${{ secrets.HUB_READ_TOKEN }}
+          path: hub
+          fetch-depth: 0
+      - name: what changed
+        id: diff
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: bash scripts/changed.sh
+      - uses: denoland/setup-deno@v2
+        if: steps.diff.outputs.deploy == 'true'
+        with:
+          deno-version: v2.x
+      - name: types and tests
+        if: steps.diff.outputs.deploy == 'true'
+        run: |
+          cd hub
+          deno check mail/functions/relay/index.ts mail/functions/gapps/index.ts mail/functions/mailer/index.ts mail/functions/hubdb/index.ts mail/functions/probe/index.ts
+          deno test --allow-env --allow-net mail/functions
+      - name: guard
+        if: steps.diff.outputs.deploy == 'true'
+        run: deno run --allow-read scripts/lint.ts hub $(cat changed_files.txt)
+      - name: migrations
+        if: steps.diff.outputs.deploy == 'true'
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: bash scripts/migrate.sh
+      - name: prompts
+        if: steps.diff.outputs.deploy == 'true'
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: bash scripts/sync_prompts.sh
+      - uses: supabase/setup-cli@v1
+        if: steps.diff.outputs.deploy == 'true'
+        id: cli
+        continue-on-error: true
+        with:
+          version: latest
+      - name: supabase cli fallback
+        if: steps.diff.outputs.deploy == 'true' && steps.cli.outcome == 'failure'
+        run: |
+          for i in 1 2 3 4; do npm install -g supabase --no-audit --no-fund && break; echo "npm install failed, retry $i"; sleep $((5 * i)); done
+          supabase --version
+      - name: functions
+        if: steps.diff.outputs.deploy == 'true'
+        id: functions
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+        run: |
+          echo "start=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+          code=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" https://api.supabase.com/v1/projects/pjuwipjyxzxlmhebzdct)
+          if [ "$code" != "200" ]; then echo "::error::SUPABASE_ACCESS_TOKEN is not accepted by api.supabase.com (HTTP $code)"; exit 1; fi
+          bash scripts/deploy_functions.sh
+      - name: quarantine
+        if: steps.diff.outputs.deploy == 'true'
+        id: quarantine
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: HEAD_SHA="${{ steps.diff.outputs.head }}" bash scripts/quarantine.sh "${{ steps.functions.outputs.start }}"
+      - name: deploy failed
+        if: failure() && steps.quarantine.outcome != 'failure'
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          psql "$SUPABASE_DB_URL" -X -q -v ON_ERROR_STOP=1 -c "insert into max.deps (name, kind, ok, checked_at, last_error, note) values ('ci', 'pipeline', false, now(), 'deploy failed before quarantine (tests, guard, migrations, prompts or functions step)', 'run ${{ github.run_id }} for ${{ steps.diff.outputs.head }}') on conflict (name) do update set ok = false, checked_at = now(), last_error = excluded.last_error, note = excluded.note"
+      - name: rollback
+        if: failure() && steps.quarantine.outcome == 'failure'
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          prev=$(psql "$SUPABASE_DB_URL" -X -q -At -c "select coalesce(max.get_setting('ci_last_good_sha'), '')" || true)
+          head="${{ steps.diff.outputs.head }}"
+          if [ -z "$prev" ] || [ "$prev" = "$head" ] || ! git -C hub cat-file -e "$prev^{commit}" 2>/dev/null; then prev=$(git -C hub rev-parse HEAD~1); fi
+          echo "quarantine failed: rolling functions back to $prev"
+          git -C hub checkout "$prev" -- mail/functions
+          bash scripts/deploy_functions.sh
+          psql "$SUPABASE_DB_URL" -X -q -v ON_ERROR_STOP=1 -c "insert into max.errors (source, action, status, message, detail) values ('ci', 'rollback', 500, 'карантин после выката не пройден: функции откачены на $prev', jsonb_build_object('run', '${{ github.run_id }}', 'from', '$head', 'to', '$prev'))" -c "insert into max.deps (name, kind, ok, checked_at, last_error, note) values ('ci', 'pipeline', false, now(), 'rollback to $prev', 'run ${{ github.run_id }}') on conflict (name) do update set ok = false, checked_at = now(), last_error = excluded.last_error, note = excluded.note"
+      - name: mark seen
+        if: always() && steps.diff.outputs.head != ''
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: psql "$SUPABASE_DB_URL" -X -q -v ON_ERROR_STOP=1 -c "select max.set_setting('ci_seen_sha', '${{ steps.diff.outputs.head }}')"
