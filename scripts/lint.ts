@@ -1,6 +1,6 @@
 // Сторож выката (27.09): детерминированная проверка кода функций и новых миграций репо hub перед выкатом. Живёт в
 // отдельном репо выката, до которого сессии Routine не дотягиваются, поэтому его нельзя выключить тем же коммитом.
-// deno run --allow-read scripts/lint.ts <корень hub> [изменённые файлы…]   (без списка — все миграции)
+// deno run --allow-read scripts/lint.ts <корень hub> [изменённые файлы… | --all]   (без списка — только функции)
 // Функции (mail/functions/**/index.ts и общие модули): _egress.ts совпадает с эталоном canon/_egress.ts побайтно; первые
 // строки каждой функции — import { guard } … и guard("<имя папки>"); импорты только из списка (версии закреплены здесь)
 // и относительные внутри mail/functions; нет обходов сторожа (присваивание fetch, Deno.connect, WebSocket, eval,
@@ -110,8 +110,9 @@ async function main() {
       problems.push(...lintFunction("mail/functions/" + e.name, "", await Deno.readTextFile(fnDir + "/" + e.name), true));
     }
   }
-  const migrations = changed.length ? changed.filter((f) => /^mail\/migrations\/.*\.sql$/.test(f)) : [];
-  if (!changed.length) for await (const f of Deno.readDir(root + "/mail/migrations")) if (f.isFile && f.name.endsWith(".sql")) migrations.push("mail/migrations/" + f.name);
+  // the migrations to check come from the list (changed since the last deploy, or not yet applied); --all takes every file
+  const migrations = changed.includes("--all") ? [] : changed.filter((f) => /^mail\/migrations\/.*\.sql$/.test(f));
+  if (changed.includes("--all")) for await (const f of Deno.readDir(root + "/mail/migrations")) if (f.isFile && f.name.endsWith(".sql")) migrations.push("mail/migrations/" + f.name);
   for (const f of migrations.sort()) {
     const src = await Deno.readTextFile(root + "/" + f).catch(() => null);
     if (src === null) continue;   // deleted in this change

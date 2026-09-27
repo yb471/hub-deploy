@@ -11,7 +11,10 @@ if [ "$seen" = "$head" ]; then
   echo "nothing new since $seen"; echo "deploy=false" >> "${GITHUB_OUTPUT:-/dev/null}"; exit 0
 fi
 if [ -z "$seen" ] || ! git -C hub cat-file -e "$seen^{commit}" 2>/dev/null; then
-  echo "no known base: full check"; ls hub/mail/migrations/*.sql | sed 's#^hub/##' > changed_files.txt
+  # no known base: the migrations still to apply are the ones to guard (the applied ones went through the earlier pipeline)
+  applied=$(psql "$SUPABASE_DB_URL" -X -q -At -c "select name from max.migrations")
+  for f in hub/mail/migrations/*.sql; do grep -qxF "$(basename "$f")" <<<"$applied" || echo "${f#hub/}" >> changed_files.txt; done
+  echo "no known base: functions and $(wc -l < changed_files.txt) unapplied migration(s)"
   echo "deploy=true" >> "${GITHUB_OUTPUT:-/dev/null}"; exit 0
 fi
 git -C hub diff --name-only "$seen" "$head" -- mail/functions mail/migrations mail/routines/max-inbox.md > changed_files.txt
