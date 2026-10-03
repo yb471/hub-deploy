@@ -13,6 +13,7 @@ export const HOSTS: Record<string, string[] | "public"> = {
   mailer: [PROJECT, ...GOOGLE],
   gapps: [PROJECT, ...GOOGLE],
   hubdb: [PROJECT],
+  ebay: [PROJECT, "api.ebay.com", "apiz.ebay.com", "uploads.linear.app"],
   probe: "public",
 };
 // a public host: a name with a dot that is not an IP, a local name or this project (the same rule as probe's safeUrl)
